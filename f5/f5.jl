@@ -98,7 +98,7 @@ function syzygy_criterion(f::ModuleElement, syzygies)
     for syz in syzygies
         success, u = divides(f.sgn.monom, syz.sgn.monom)
         if success && f.sgn.index == syz.sgn.index
-            @warn "DISCARDED $f by $syz"
+            # @warn "DISCARDED $f by $syz"
             global F5_DISCARDED
             F5_DISCARDED += 1
             return true
@@ -183,6 +183,7 @@ function signature_groebner_basis(F)
         fNF = regular_normal_form(f, G)
 
         if issyzygy(fNF)
+            @warn "Reduction to zero!"
             global F5_REDUCED
             F5_REDUCED += 1
             push!(syzygies, fNF)
@@ -197,7 +198,7 @@ function signature_groebner_basis(F)
                 push!(P, spoly(fNF, fj))
 
                 @info "$fNF  $fj"
-                @warn "SPOLY $(last(P))"
+                @info "SPOLY $(last(P))"
             end
 
             # update G
@@ -221,6 +222,9 @@ function signature_groebner_basis(F)
 end
 
 #-----------------------------------------------------------------------------
+
+using Logging
+Logging.global_logger(ConsoleLogger(Logging.Warn))
 
 R, (x,y,z) = PolynomialRing(QQ, ["x","y", "z"], ordering=:degrevlex)
 

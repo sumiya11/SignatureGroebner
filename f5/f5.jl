@@ -4,20 +4,70 @@ include("module.jl")
 using Logging
 Logging.global_logger(Logging.ConsoleLogger(Logging.Info))
 
-F5_DISCARDED = 0
-F5_REDUCED   = 0
+F5_DETECTED_USELESS_NF = 0
+F5_USELESS_NF   = 0
 F5_NF        = 0
-F5_SIZE      = 0
+F5_BASIS_SIZE      = 0
 
 function zerof5()
-    global F5_DISCARDED
+    global F5_DETECTED_USELESS_NF
+    global F5_USELESS_NF
     global F5_NF
-    global F5_SIZE
-    global F5_REDUCED
-    F5_DISCARDED = 0
-    F5_NF        = 0
-    F5_SIZE      = 0
-    F5_REDUCED   = 0
+    global F5_BASIS_SIZE
+    F5_DETECTED_USELESS_NF = 0
+    F5_USELESS_NF        = 0
+    F5_NF      = 0
+    F5_BASIS_SIZE   = 0
+end
+
+
+function katsuran(n; ground=QQ)
+    R, x = PolynomialRing(ground, ["x$i" for i in 0:n])
+
+    return [
+        (sum(x[abs(l)+1]*x[abs(m-l)+1] for l=-n:n if abs(m-l)<=n) -
+        x[m+1] for m=0:n-1)...,
+        x[1] + 2sum(x[i+1] for i=1:n) - 1
+    ]
+end
+
+
+#-----------------------------------------------------------------------------
+
+function homogenize(F)
+    base = parent(F[1])
+    s = copy(symbols(base))
+    push!(s, :h)
+    R, xsu = PolynomialRing(base_ring(base), s, ordering=ordering(base))
+    xs = xsu[1:end-1]
+    u = xsu[end]
+
+    homF = Vector{eltype(F)}(undef, 0)
+    for f in F
+        tdeg = total_degree(leading_monomial(f))
+        f = evaluate(f, xs)
+        homf = zero(R)
+        for t in terms(f)
+            homf += t * u^(tdeg - total_degree(t))
+        end
+        push!(homF, homf)
+    end
+
+    homF
+end
+
+function dehomogenize(homF)
+    R = parent(homF[1])
+    xs = collect(gens(R))
+    xs[end] = one(R)
+
+    F = Vector{eltype(homF)}(undef, 0)
+    for homf in homF
+        f = evaluate(homf, xs)
+        push!(F, f)
+    end
+
+    F
 end
 
 #-----------------------------------------------------------------------------
@@ -28,7 +78,7 @@ function regular_reduction_step(f::ModuleElement, g::ModuleElement)
     evalf = f.ev
     evalg = g.ev
 
-    @info "reducing $(f) with $(g)" evalf evalg
+    # @info "reducing $(f) with $(g)" evalf evalg
 
     for t in terms(evalf)
         # if divides
@@ -41,7 +91,7 @@ function regular_reduction_step(f::ModuleElement, g::ModuleElement)
             # not really correct!
             if f > u*g
                 newf = f - u*g
-                @info "regular! $(f) - $(u)*$(g) --> $newf"
+                # @info "regular! $(f) - $(u)*$(g) --> $newf"
                 return true, newf
             end
         end
@@ -64,13 +114,13 @@ end
 
 # regular normal form of f w.r.t. G
 function regular_normal_form(f::ModuleElement, G)
-    @info "computing reg normalform of $f w.r.t $G.."
+    # @info "computing reg normalform of $f w.r.t $G.."
 
     success = true
     newf = copy(f)
     while success
         success, newf = regular_reduction_step(newf, G)
-        @info "reduction $success"
+        # @info "reduction $success"
     end
     newf
 end
@@ -99,8 +149,8 @@ function syzygy_criterion(f::ModuleElement, syzygies)
         success, u = divides(f.sgn.monom, syz.sgn.monom)
         if success && f.sgn.index == syz.sgn.index
             # @warn "DISCARDED $f by $syz"
-            global F5_DISCARDED
-            F5_DISCARDED += 1
+            global F5_DETECTED_USELESS_NF
+            F5_DETECTED_USELESS_NF += 1
             return true
         end
     end
@@ -139,6 +189,8 @@ function construct_module(F)
 end
 
 function signature_groebner_basis(F)
+    sort!(F, by=leading_monomial, lt=f5_total_degree_lead_cmp)
+
     F = map(f -> map_coefficients(c -> c // leading_coefficient(f), f), F)
 
     G = construct_module(F)
@@ -163,11 +215,11 @@ function signature_groebner_basis(F)
         end
     end
 
-    @info "generated initial G and P:"
-    @info "F = $F"
-    @info "G = $G"
-    @info "P = $P"
-    @info "syz = $syzygies"
+    # @info "generated initial G and P:"
+    # @info "F = $F"
+    # @info "G = $G"
+    # @info "P = $P"
+    # @info "syz = $syzygies"
 
     while !isempty(P)
         sort!(P, rev=false)
@@ -178,15 +230,20 @@ function signature_groebner_basis(F)
             continue
         end
 
+        # global F5_NF
+        # F5_NF += 1
+        fNF = regular_normal_form(f, G)
         global F5_NF
         F5_NF += 1
-        fNF = regular_normal_form(f, G)
 
         if issyzygy(fNF)
-            @warn "Reduction to zero!"
-            global F5_REDUCED
-            F5_REDUCED += 1
+            # @warn "Reduction to zero!"
+            # global F5_REDUCED
+            # F5_REDUCED += 1
             push!(syzygies, fNF)
+
+            global F5_USELESS_NF
+            F5_USELESS_NF += 1
         elseif !issingularlytopreducible(fNF, G)
             # update P
             for fj in G
@@ -197,26 +254,31 @@ function signature_groebner_basis(F)
 
                 push!(P, spoly(fNF, fj))
 
-                @info "$fNF  $fj"
-                @info "SPOLY $(last(P))"
+                # @info "$fNF  $fj"
+                # @info "SPOLY $(last(P))"
             end
 
             # update G
             fNFnormalzed = fNF * inv(leading_coefficient(fNF.ev))
             push!(G, fNFnormalzed)
+        else
+            global F5_USELESS_NF
+            F5_USELESS_NF += 1
         end
 
-        @info "updated G and P"
-        @info "G = $G"
-        @info "P = $P"
-        @info "syz = $syzygies"
+        # @info "updated G and P"
+        # @info "G = $G"
+        # @info "P = $P"
+        # @info "syz = $syzygies"
     end
 
-    global F5_SIZE
-    F5_SIZE = length(G) - length(F)
+    # global F5_SIZE
+    # F5_SIZE = length(G) - length(F)
 
-    global F5_REDUCED
-    global F5_DISCARDED
+    # global F5_REDUCED
+    # global F5_DISCARDED
+    global F5_BASIS_SIZE
+    F5_BASIS_SIZE = length(G)
 
     G
 end
